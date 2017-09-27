@@ -1,0 +1,41 @@
+#!/bin/bash
+
+USERNAME=rc15129
+NAME=$(date +'%Y%m%d%H%M%S')
+
+if [ -e job.sh ]; then
+    time=$(awk -v result="`grep walltime job.sh`" 'BEGIN {gsub("^.*walltime=","",result); print substr(result,1,8)}')
+    ssh $USERNAME@snowy.cs.bris.ac.uk mkdir $NAME
+    find . -maxdepth 1 ! -path "./results" ! -path "." | xargs -iz scp -r z $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ &>/dev/null
+    ssh $USERNAME@snowy.cs.bris.ac.uk -t "
+    
+    #start of snowy script
+    scp -r $NAME $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME &>/dev/null
+    rm -rf ~/$NAME/*
+    ssh $USERNAME@bluecrystalp3.bris.ac.uk -t '
+    
+    #start of BC script
+    cd $NAME
+    qsub job.sh
+
+    ' 2>/dev/null
+    " 2>/dev/null
+    echo Job $JOB submitted
+
+    (sleep $(echo $time | sed -E 's/(.*):(.+):(.+)/\1*3600+\2*60+\3/;s/(.+):(.+)/\1*60+\2/' | bc)
+    ssh $USERNAME@snowy.cs.bris.ac.uk -t "
+    
+    cd $NAME
+    #cleanup on BC
+    scp -r $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME/* . &>/dev/null
+    ssh $USERNAME@bluecrystalp3.bris.ac.uk -t 'rm -rf ~/$NAME'
+    " &>/dev/null
+    mkdir ./results 2>/dev/null
+    scp -r $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ ./results/$NAME/ &>/dev/null
+    ssh $USERNAME@snowy.cs.bris.ac.uk -t "rm -rf ~/$NAME" &>/dev/null
+    find . -maxdepth 1 ! -path "./results" ! -path "." | xargs -iz rm -rf ./results/$NAME/z
+    notify-send "Results recieved for $NAME"
+    ) &
+else
+    echo No job.sh found
+fi
