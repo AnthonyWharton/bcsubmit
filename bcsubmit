@@ -49,7 +49,7 @@ if [ -e job.sh ]; then
     cd $NAME
     scp -r $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME/* . &>/dev/null
     ssh $USERNAME@bluecrystalp3.bris.ac.uk -t 'rm -rf ~/$NAME'
-    " #&>/dev/null
+    " &>/dev/null
 
     #cleanup on Snowy
     mkdir ./results 2>/dev/null
@@ -59,7 +59,7 @@ if [ -e job.sh ]; then
 
     #notify about results - might not work on OSX / some Linux
     notify-send "Results recieved for $JOB"
-    ) 
+    ) &
 else
     echo No job.sh found
 fi
