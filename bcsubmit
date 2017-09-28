@@ -4,10 +4,8 @@ USERNAME=rc15129
 NAME=$(date +'%Y%m%d%H%M%S')
 
 if [ -e job.sh ]; then
-    if ! cat job.sh | grep "#PBS -m ae" &>/dev/null ; then
-        echo Adding mail alert
-        sed -i '2i\#PBS -m ae' job.sh
-    fi
+    sed -i '/#PBS -m/d' job.sh
+    sed -i '2i\#PBS -m ae' job.sh
     time=$(awk -v result="`grep walltime job.sh`" 'BEGIN {gsub("^.*walltime=","",result); print substr(result,1,8)}')
     ssh $USERNAME@snowy.cs.bris.ac.uk mkdir $NAME
     find . -maxdepth 1 ! -path "./results" ! -path "." | xargs -iz scp -r z $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ &>/dev/null
@@ -30,15 +28,12 @@ if [ -e job.sh ]; then
 
     (SLEEPTIME=$(echo $time | sed -E 's/(.*):(.+):(.+)/\1*3600+\2*60+\3/;s/(.+):(.+)/\1*60+\2/' | bc)
 
-    sleep $SLEEPTIME
-
     ssh $USERNAME@snowy.cs.bris.ac.uk -t "
     ssh $USERNAME@bluecrystalp3.bris.ac.uk -t \"
     while [ 1 ]
     do
-        STATUS=\\\$(grep -A 5 'Subject: PBS JOB $JOB' /var/spool/mail/$USERNAME | tail -n 1)
-        if [ '\\\$STATUS' != '' ]; then
-            echo \\\$STATUS
+        STATUS=\\\$(grep -A 14 'Subject: PBS JOB $JOB' /var/spool/mail/$USERNAME)
+        if [[ \\\$STATUS == *Exit_status* ]]; then
             break
         fi
         sleep $(($SLEEPTIME / 5))
@@ -58,7 +53,7 @@ if [ -e job.sh ]; then
     find . -maxdepth 1 ! -path "./results" ! -path "." | xargs -iz rm -rf ./results/$JOB/z
 
     #notify about results - might not work on OSX / some Linux
-    notify-send "Results recieved for $JOB"
+    notify-send -u critical "Results recieved for $JOB"
     ) &
 else
     echo No job.sh found
