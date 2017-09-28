@@ -4,10 +4,14 @@ USERNAME=rc15129
 NAME=$(date +'%Y%m%d%H%M%S')
 
 if [ -e job.sh ]; then
+    if ! cat job.sh | grep "#PBS -m ae" &>/dev/null ; then
+        echo Adding mail alert
+        sed -i '2i\#PBS -m ae' job.sh
+    fi
     time=$(awk -v result="`grep walltime job.sh`" 'BEGIN {gsub("^.*walltime=","",result); print substr(result,1,8)}')
     ssh $USERNAME@snowy.cs.bris.ac.uk mkdir $NAME
     find . -maxdepth 1 ! -path "./results" ! -path "." | xargs -iz scp -r z $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ &>/dev/null
-    ssh $USERNAME@snowy.cs.bris.ac.uk -t "
+    JOB=$(ssh $USERNAME@snowy.cs.bris.ac.uk -t "
     
     #start of snowy script
     scp -r $NAME $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME &>/dev/null
@@ -20,22 +24,42 @@ if [ -e job.sh ]; then
 
     ' 2>/dev/null
     " 2>/dev/null
-    echo Job $JOB submitted
+    ) 
+    JOB=$(echo $JOB | tr -d '\r')
+    echo Submitted $JOB 
 
-    (sleep $(echo $time | sed -E 's/(.*):(.+):(.+)/\1*3600+\2*60+\3/;s/(.+):(.+)/\1*60+\2/' | bc)
+    (SLEEPTIME=$(echo $time | sed -E 's/(.*):(.+):(.+)/\1*3600+\2*60+\3/;s/(.+):(.+)/\1*60+\2/' | bc)
+
+    sleep $SLEEPTIME
+
     ssh $USERNAME@snowy.cs.bris.ac.uk -t "
+    ssh $USERNAME@bluecrystalp3.bris.ac.uk -t \"
+    while [ 1 ]
+    do
+        STATUS=\\\$(grep -A 5 'Subject: PBS JOB $JOB' /var/spool/mail/$USERNAME | tail -n 1)
+        if [ '\\\$STATUS' != '' ]; then
+            echo \\\$STATUS
+            break
+        fi
+        sleep $(($SLEEPTIME / 5))
+    done
+    \"
     
-    cd $NAME
     #cleanup on BC
+    cd $NAME
     scp -r $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME/* . &>/dev/null
     ssh $USERNAME@bluecrystalp3.bris.ac.uk -t 'rm -rf ~/$NAME'
-    " &>/dev/null
+    " #&>/dev/null
+
+    #cleanup on Snowy
     mkdir ./results 2>/dev/null
-    scp -r $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ ./results/$NAME/ &>/dev/null
+    scp -r $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ ./results/$JOB/ &>/dev/null
     ssh $USERNAME@snowy.cs.bris.ac.uk -t "rm -rf ~/$NAME" &>/dev/null
-    find . -maxdepth 1 ! -path "./results" ! -path "." | xargs -iz rm -rf ./results/$NAME/z
-    notify-send "Results recieved for $NAME"
-    ) &
+    find . -maxdepth 1 ! -path "./results" ! -path "." | xargs -iz rm -rf ./results/$JOB/z
+
+    #notify about results - might not work on OSX / some Linux
+    notify-send "Results recieved for $JOB"
+    ) 
 else
     echo No job.sh found
 fi
