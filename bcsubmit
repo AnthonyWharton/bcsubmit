@@ -50,7 +50,7 @@ if [ -e job.sh ]; then
     mkdir ./results 2>/dev/null
     scp -r $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ ./results/$JOB/ &>/dev/null
     ssh $USERNAME@snowy.cs.bris.ac.uk -t "rm -rf ~/$NAME" &>/dev/null
-    find . -maxdepth 1 ! -path "./results" ! -path "." | xargs -iz rm -rf ./results/$JOB/z
+    find . -maxdepth 1 ! -path "./results" ! -path "." ! -name "*.txt" | xargs -iz rm -rf ./results/$JOB/z
 
     #notify about results - might not work on OSX / some Linux
     notify-send -u critical "Results recieved for $JOB"
