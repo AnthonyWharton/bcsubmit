@@ -53,7 +53,7 @@ if [ -e job.sh ]; then
     find . -maxdepth 1 ! -path "./results" ! -path "." ! -name "*.txt" | xargs -iz rm -rf ./results/$JOB/z
 
     #notify about results - might not work on OSX / some Linux
-    notify-send -u critical "Results recieved for $JOB"
+    notify-send -u critical --app-name BlueCrystal "Results recieved for $JOB"
     ) &
 else
     echo No job.sh found
