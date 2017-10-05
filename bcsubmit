@@ -4,19 +4,28 @@ USERNAME=rc15129
 NAME=$(date +'%Y%m%d%H%M%S')
 
 if [ -e job.sh ]; then
+    # Remove any mail strings and add our own one
     sed -i '/#PBS -m/d' job.sh
     sed -i '2i\#PBS -m ae' job.sh
+    
+    # Get the expected time from job.sh
     time=$(awk -v result="`grep walltime job.sh`" 'BEGIN {gsub("^.*walltime=","",result); print substr(result,1,8)}')
+    
+    # SSH into snowy and make a temporary directory
     ssh $USERNAME@snowy.cs.bris.ac.uk mkdir $NAME
+    
+    # Copy the current directory minus results and itself to snowy
     find . -maxdepth 1 ! -path "./results" ! -path "." | xargs -iz scp -r z $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ &>/dev/null
+    
+    # Submit the job we are doing on snowy
     JOB=$(ssh $USERNAME@snowy.cs.bris.ac.uk -t "
     
-    #start of snowy script
+    # Start of snowy script
     scp -r $NAME $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME &>/dev/null
     rm -rf ~/$NAME/*
     ssh $USERNAME@bluecrystalp3.bris.ac.uk -t '
     
-    #start of BC script
+    # Start of BC script
     cd $NAME
     qsub job.sh
 
@@ -26,8 +35,10 @@ if [ -e job.sh ]; then
     JOB=$(echo $JOB | tr -d '\r')
     echo Submitted $JOB 
 
+    # Sleep for the estimated job time
     (SLEEPTIME=$(echo $time | sed -E 's/(.*):(.+):(.+)/\1*3600+\2*60+\3/;s/(.+):(.+)/\1*60+\2/' | bc)
 
+    # Sleep for the estimated job time
     ssh $USERNAME@snowy.cs.bris.ac.uk -t "
     ssh $USERNAME@bluecrystalp3.bris.ac.uk -t \"
     while [ 1 ]
@@ -40,19 +51,19 @@ if [ -e job.sh ]; then
     done
     \"
     
-    #cleanup on BC
+    # Cleanup on BC
     cd $NAME
     scp -r $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME/* . &>/dev/null
     ssh $USERNAME@bluecrystalp3.bris.ac.uk -t 'rm -rf ~/$NAME'
     " &>/dev/null
 
-    #cleanup on Snowy
+    # Cleanup on Snowy
     mkdir ./results 2>/dev/null
     scp -r $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ ./results/$JOB/ &>/dev/null
     ssh $USERNAME@snowy.cs.bris.ac.uk -t "rm -rf ~/$NAME" &>/dev/null
     find . -maxdepth 1 ! -path "./results" ! -path "." ! -name "*.txt" | xargs -iz rm -rf ./results/$JOB/z
 
-    #notify about results - might not work on OSX / some Linux
+    # Notify about results - might not work on OSX / some Linux
     notify-send -u critical --app-name BlueCrystal "Results recieved for $JOB"
     ) &
 else
