@@ -1,71 +1,168 @@
 #!/bin/bash
+# Script for submitting jobs to BlueCrystal for execution, and retrieving the
+# results using the Universtity of Bristol's Computer Science Snowy server as a
+# proxy. For usage run ./bcscript --help
 
-USERNAME=rc15129
+# Hard tabs were used for this file for here document notation (<<-) and
+# maintaing consitency.
+
+#####
+### DEFAULT OPTIONS
+#####
+# Username on Snowy and BlueCrystal, set with -u | --user
+USERNAME=aw15885
+# Default Job File name, set with -j | --jobfile
+JOBFILE="job.sh"
+# Regex of files to ignore from results, set with -i | --ignore
+IGNORERESULT="((^.$)|(^..$)|(.git)|(result.*))"
+
+# Makes a script in a string with the first job that pushes files over to
+# BlueCrystal and runs the job. This is stored in a variable called $JOBSTART
+function setJobStart {
+	# Job to be run on BlueCrystal (stored in JOB1BLUECRYSTAL)
+	read -r -d '' JOBSBC <<- EOF
+	# Run on BlueCrystal
+	# Find transfered files and submit job
+	cd $NAME
+	qsub $JOBFILE
+	EOF
+
+	# Job to be run on Snowy (stored in JOBSTART, includes running
+	# JOB1BLUECRYSTAL on BlueCrystal)
+	read -r -d '' JOBSTART <<- EOF
+	# Run on Snowy
+	# Transfer files to BlueCrystal
+	scp -r $NAME $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME &>/dev/null
+
+	# Clear the folder so we only transfer results back
+	rm -rf ~/$NAME/*
+
+	# Get things running on BlueCrystal
+	ssh $USERNAME@bluecrystalp3.bris.ac.uk -t '$JOBSBC' 2>/dev/null
+	EOF
+}
+
+# Makes a script in a string with the second job, that waits for and retrieves
+# results, and cleans up. This is stored in a variable called $JOBWAIT
+function setJobWait {
+	read -r -d '' JOBWBC <<- EOF
+	# Run on BlueCrystal
+	# Wait in loop until we have mail saying our job is complete (we should
+	# not poll qstat for performance reasons)
+	while [ 1 ]
+	do
+		STATUS=\\\$(grep -A 14 'Subject: PBS JOB $JOB' /var/spool/mail/$USERNAME)
+		if [[ \\\$STATUS == *Exit_status* ]]; then
+			break
+		fi
+		sleep $(($SLEEPTIME / 5))
+	done
+	EOF
+
+	read -r -d '' JOBWAIT <<- EOF
+	# SSH into BlueCrystal to wait for job completion.
+	ssh $USERNAME@bluecrystalp3.bris.ac.uk -t "$JOBWBC"
+
+	# Retrieve files from BlueCrystal and then cleanup
+	cd $NAME
+	scp -r $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME/* . &>/dev/null
+	ssh $USERNAME@bluecrystalp3.bris.ac.uk -t "rm -rf ~/$NAME"
+	EOF
+}
+
+function prepareAndExtract {
+	# Remove any mail strings and add our own one
+	sed -i '/#PBS -m/d' $JOBFILE
+	sed -i '2i\#PBS -m ae' $JOBFILE
+
+	# Get the expected time from $JOBFILE
+	time=$(awk -v result="`grep walltime $JOBFILE`" 'BEGIN {gsub("^.*walltime=","",result); print substr(result,1,8)}')
+	SLEEPTIME=$(echo $time | sed -E 's/(.*):(.+):(.+)/\1*3600+\2*60+\3/;s/(.+):(.+)/\1*60+\2/' | bc)
+}
+
+function startJob {
+	# Copy the relevant files to Snowy
+	ssh $USERNAME@snowy.cs.bris.ac.uk "mkdir $NAME"
+	ls -a1 | grep -Ev $IGNORERESULT | xargs -iz scp -r z $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ &>/dev/null
+
+	# Initialise the first round of jobs responsible with getting files onto
+	# BlueCrystal and running them, into a variable JOB1
+	setJobStart
+	JOB=$(ssh $USERNAME@snowy.cs.bris.ac.uk -t "$JOBSTART" 2>/dev/null)
+	JOB=$(echo $JOB | tr -d '\r')
+	echo "Submitted to BlueCrystal, Job Name: \"$JOB\""
+}
+
+function waitForResults {
+	# Run the second round of jobs responsible with waiting for the end
+	# of the job, getting results back and cleaning up.
+	setJobWait
+	ssh $USERNAME@snowy.cs.bris.ac.uk -t "$JOBWAIT" &>/dev/null
+
+	# Retrieve Results and clear out any files that are specified in the
+	# $IGNORERESULT regex - things that we don't count as results
+	mkdir ./results 2>/dev/null
+	scp -r $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ ./results/$JOB/ &>/dev/null
+	ls -a1 | grep -Ev $IGNORERESULT | xargs -iz rm -rf ./results/$JOB/z
+
+	# Cleanup Snowy
+	ssh $USERNAME@snowy.cs.bris.ac.uk -t "rm -rf ~/$NAME" &>/dev/null
+
+	# Notify about results - might not work on all platforms
+	notify-send -u critical --app-name BlueCrystal "Results recieved for $JOB"
+}
+
+function main {
+	if [ -e $JOBFILE ]; then
+		prepareAndExtract
+		startJob
+		waitForResults &
+	else
+		echo "No job file found (looked for $JOBFILE)"
+	fi
+}
+
+function help {
+	echo "Usage: bcsubmit [OPTIONS]"
+	echo
+	echo "Options are as follows:"
+	echo "  -u USER    --user    Specifies username on Snowy/BlueCrystal"
+	echo "  -j JOBFILE --jobfile Specifies the name of the Job File"
+	echo "  -i REGEX   --ignore  Specifies files to be ignore from results"
+	echo "                       as a regex, default: \"((^.$)|(^..$)|(.git)|(result.*))\""
+	echo "  -h         --help    Shows this print out"
+}
+
+# Folder Name for transfered files on Snowy / BlueCrystal
 NAME=$(date +'%Y%m%d%H%M%S')
 
-if [ -e job.sh ]; then
-    # Remove any mail strings and add our own one
-    sed -i '/#PBS -m/d' job.sh
-    sed -i '2i\#PBS -m ae' job.sh
-    
-    # Get the expected time from job.sh
-    time=$(awk -v result="`grep walltime job.sh`" 'BEGIN {gsub("^.*walltime=","",result); print substr(result,1,8)}')
-    
-    # SSH into snowy and make a temporary directory
-    ssh $USERNAME@snowy.cs.bris.ac.uk mkdir $NAME
-    
-    # Copy the current directory minus results and itself to snowy
-    find . -maxdepth 1 ! -path "./results" ! -path "." | xargs -iz scp -r z $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ &>/dev/null
-    
-    # Submit the job we are doing on snowy
-    JOB=$(ssh $USERNAME@snowy.cs.bris.ac.uk -t "
-    
-    # Start of snowy script
-    scp -r $NAME $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME &>/dev/null
-    rm -rf ~/$NAME/*
-    ssh $USERNAME@bluecrystalp3.bris.ac.uk -t '
-    
-    # Start of BC script
-    cd $NAME
-    qsub job.sh
-
-    ' 2>/dev/null
-    " 2>/dev/null
-    ) 
-    JOB=$(echo $JOB | tr -d '\r')
-    echo Submitted $JOB 
-
-    # Sleep for the estimated job time
-    (SLEEPTIME=$(echo $time | sed -E 's/(.*):(.+):(.+)/\1*3600+\2*60+\3/;s/(.+):(.+)/\1*60+\2/' | bc)
-
-    # Sleep for the estimated job time
-    ssh $USERNAME@snowy.cs.bris.ac.uk -t "
-    ssh $USERNAME@bluecrystalp3.bris.ac.uk -t \"
-    while [ 1 ]
-    do
-        STATUS=\\\$(grep -A 14 'Subject: PBS JOB $JOB' /var/spool/mail/$USERNAME)
-        if [[ \\\$STATUS == *Exit_status* ]]; then
-            break
-        fi
-        sleep $(($SLEEPTIME / 5))
-    done
-    \"
-    
-    # Cleanup on BC
-    cd $NAME
-    scp -r $USERNAME@bluecrystalp3.bris.ac.uk:~/$NAME/* . &>/dev/null
-    ssh $USERNAME@bluecrystalp3.bris.ac.uk -t 'rm -rf ~/$NAME'
-    " &>/dev/null
-
-    # Cleanup on Snowy
-    mkdir ./results 2>/dev/null
-    scp -r $USERNAME@snowy.cs.bris.ac.uk:~/$NAME/ ./results/$JOB/ &>/dev/null
-    ssh $USERNAME@snowy.cs.bris.ac.uk -t "rm -rf ~/$NAME" &>/dev/null
-    find . -maxdepth 1 ! -path "./results" ! -path "." ! -name "*.txt" | xargs -iz rm -rf ./results/$JOB/z
-
-    # Notify about results - might not work on OSX / some Linux
-    notify-send -u critical --app-name BlueCrystal "Results recieved for $JOB"
-    ) &
+# Argument Parsing loop
+if [ $# -gt 0 ]; then
+	while [ $# -gt 0 ]; do
+		case $1 in
+			-u|--user) 	shift
+				USERNAME=$1
+				shift
+				;;
+			-j|--jobfile)	shift
+				JOBFILE=$1
+				shift
+				;;
+			-i|--ignore)	shift
+				IGNORERESULT=$1
+				shift
+				;;
+			-h|--help)
+				help
+				exit 0
+				;;
+			*)	echo "Unrecognized argument, please refer to help:"
+				help
+				exit 1
+				;;
+		esac
+	done
 else
-    echo No job.sh found
+	echo "No Job File Specifed, continuing with default settings if possible.."
 fi
+main
