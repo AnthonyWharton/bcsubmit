@@ -17,3 +17,5 @@ Options are as follows:
                        as a regex, default: "((^.$)|(^..$)|(.git)|(result.*))"
   -h         --help    Shows this print out
 ```
+
+An example job has been provided with a Makefile in the `exampleJob` folder.
